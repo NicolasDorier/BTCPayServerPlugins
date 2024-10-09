@@ -629,13 +629,19 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
                 }
             }
         };
+
+        string log = "";
+        log += $"Query: {request.Query}\n";
+		log += $"Input1: {WalletId}\n";
+		log += $"Input2: {bolt11}\n";
+		this.Logger.LogInformation(log);
         var bolt11Parsed = BOLT11PaymentRequest.Parse(bolt11, _network);
        
         CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation,
             new CancellationTokenSource(payParams?.SendTimeout ?? PayInvoiceParams.DefaultSendTimeout).Token);
         var response =(JObject) (await  _client.SendQueryAsync<dynamic>(request,  cts.Token)).Data.lnInvoicePaymentSend;
-        
-        var result = new PayResponse();
+		this.Logger.LogInformation(response.ToString(Formatting.Indented));
+		var result = new PayResponse();
         result.Result = response["status"].Value<string>() switch
         {
             "ALREADY_PAID" => PayResult.Ok,
