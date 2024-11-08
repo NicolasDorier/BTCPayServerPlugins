@@ -3,6 +3,7 @@ using System;
 using System.Linq;
 using System.Threading;
 using BTCPayServer.Lightning;
+using BTCPayServer.Logging;
 using NBitcoin;
 using NNostr.Client;
 using NNostr.Client.Protocols;
@@ -12,10 +13,12 @@ namespace BTCPayServer.Plugins.NIP05;
 public class NostrWalletConnectLightningConnectionStringHandler : ILightningConnectionStringHandler
 {
     private readonly NostrClientPool _nostrClientPool;
+    private readonly Logs logs;
 
-    public NostrWalletConnectLightningConnectionStringHandler(NostrClientPool nostrClientPool)
+    public NostrWalletConnectLightningConnectionStringHandler(NostrClientPool nostrClientPool, BTCPayServer.Logging.Logs logs)
     {
         _nostrClientPool = nostrClientPool;
+        this.logs = logs;
     }
     public ILightningClient? Create(string connectionString, Network network, out string? error)
     {
@@ -71,7 +74,7 @@ public class NostrWalletConnectLightningConnectionStringHandler : ILightningConn
                     response.Notifications ?? commands.Value.Notifications);
 
                 error = null;
-                return new NostrWalletConnectLightningClient(_nostrClientPool, uri, network, values);
+                return new NostrWalletConnectLightningClient(_nostrClientPool, uri, network, values) { logs = logs };
             }
         }
         catch (Exception e)
