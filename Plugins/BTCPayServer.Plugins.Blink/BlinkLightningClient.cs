@@ -229,6 +229,7 @@ query TransactionsByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!
 
     public LightningPayment? ToLightningPayment(JObject transaction)
     {
+        Logger.LogInformation("ToLightningPayment: " + transaction.ToString());
         if ((string)transaction["direction"] == "RECEIVE")
             return null;
 
