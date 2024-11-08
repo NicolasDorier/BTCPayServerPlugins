@@ -8,10 +8,13 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using BTCPayServer.Lightning;
+using BTCPayServer.Logging;
+using Microsoft.Extensions.Logging;
 using NBitcoin;
 using NBitcoin.Secp256k1;
 using NNostr.Client;
 using NNostr.Client.Protocols;
+using static NNostr.Client.Protocols.NIP47;
 using SHA256 = System.Security.Cryptography.SHA256;
 
 namespace BTCPayServer.Plugins.NIP05;
@@ -25,6 +28,7 @@ public class NostrWalletConnectLightningClient : ILightningClient
     private readonly Network _network;
     private readonly (string[] Commands, string[] Notifications) _commands;
     private readonly (ECXOnlyPubKey pubkey, ECPrivKey secret, Uri[] relays, string lud16) _connectParams;
+    internal Logs logs;
 
     public NostrWalletConnectLightningClient(NostrClientPool nostrClientPool, Uri uri, Network network,
         (string[] Commands, string[] Notifications) commands)
@@ -174,6 +178,8 @@ public class NostrWalletConnectLightningClient : ILightningClient
                 {
                     PaymentHash = paymentHash
                 }, cts.Token);
+            logs?.PayServer.LogInformation("GETPAYMENT");
+            Log(tx);
             return ToLightningPayment(tx)!;
         }
     }
@@ -446,6 +452,8 @@ public class NostrWalletConnectLightningClient : ILightningClient
                         PaymentHash = payHash
                     }, cts.Token);
                 var lp = ToLightningPayment(tx)!;
+                logs?.PayServer.LogInformation("PAY");
+                Log(tx);
                 return new PayResponse(lp.Status == LightningPaymentStatus.Complete ? PayResult.Ok : PayResult.Error,
                     new PayDetails()
                     {
@@ -464,6 +472,15 @@ public class NostrWalletConnectLightningClient : ILightningClient
                 Result = PayResult.Error,
                 ErrorDetail = e.Message
             };
+        }
+    }
+
+    private void Log(Nip47Transaction tx)
+    {
+        if (logs is not null)
+        {
+            var resp = tx is null ? "NULL" : System.Text.Json.JsonSerializer.Serialize(tx, new System.Text.Json.JsonSerializerOptions() { WriteIndented = true });
+            logs.PayServer.LogInformation(resp);
         }
     }
 
