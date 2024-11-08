@@ -440,7 +440,8 @@ public class NostrWalletConnectLightningClient : ILightningClient
                                 ? Convert.ToDecimal(payParams.Amount.MilliSatoshi)
                                 : null,
                         }, cts.Token);
-                
+                logs?.PayServer.LogInformation("PAY1");
+                Log(response);
                 var payHash = payParams?.PaymentHash?.ToString()?? 
                                 (response.Preimage is not null? 
                                   ConvertHelper.ToHexString(SHA256.HashData(Convert.FromHexString(response.Preimage))): 
@@ -452,7 +453,7 @@ public class NostrWalletConnectLightningClient : ILightningClient
                         PaymentHash = payHash
                     }, cts.Token);
                 var lp = ToLightningPayment(tx)!;
-                logs?.PayServer.LogInformation("PAY");
+                logs?.PayServer.LogInformation("PAY2");
                 Log(tx);
                 return new PayResponse(lp.Status == LightningPaymentStatus.Complete ? PayResult.Ok : PayResult.Error,
                     new PayDetails()
@@ -475,7 +476,7 @@ public class NostrWalletConnectLightningClient : ILightningClient
         }
     }
 
-    private void Log(Nip47Transaction tx)
+    private void Log<T>(T tx)
     {
         if (logs is not null)
         {
