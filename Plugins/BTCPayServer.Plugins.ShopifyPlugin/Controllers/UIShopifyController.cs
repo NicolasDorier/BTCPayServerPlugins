@@ -76,6 +76,17 @@ public class UIShopifyController : Controller
 			var settings = await _storeRepo.GetSettingAsync<ShopifyStoreSettings>(storeId, ShopifyStoreSettings.SettingsName) ?? new ShopifyStoreSettings(); // Should not be null as we have appClient
 			if (settings.ShopUrl is null || settings.AccessToken is null)
 			{
+				this.TempData.SetStatusMessageModel(new StatusMessageModel()
+				{
+					Message = "Shopify plugin successfully configured",
+					Severity = StatusMessageModel.StatusSeverity.Success
+				});
+				settings.ShopUrl = t.ShopUrl;
+				settings.AccessToken = accessToken.AccessToken;
+				await _storeRepo.UpdateSetting(storeId, ShopifyStoreSettings.SettingsName, settings);
+			}
+			else
+			{
 				if (settings.ShopUrl != t.ShopUrl)
 				{
 					this.TempData.SetStatusMessageModel(new StatusMessageModel()
@@ -91,20 +102,12 @@ public class UIShopifyController : Controller
 						Message = "The Shopify plugin is already configured",
 						Severity = StatusMessageModel.StatusSeverity.Success
 					});
-					settings.AccessToken = accessToken.AccessToken;
-					await _storeRepo.UpdateSetting(storeId, ShopifyStoreSettings.SettingsName, settings);
+					if (settings.AccessToken != accessToken.AccessToken)
+					{
+						settings.AccessToken = accessToken.AccessToken;
+						await _storeRepo.UpdateSetting(storeId, ShopifyStoreSettings.SettingsName, settings);
+					}
 				}
-			}
-			else
-			{
-				this.TempData.SetStatusMessageModel(new StatusMessageModel()
-				{
-					Message = "Shopify plugin successfully configured",
-					Severity = StatusMessageModel.StatusSeverity.Success
-				});
-				settings.ShopUrl = t.ShopUrl;
-				settings.AccessToken = accessToken.AccessToken;
-				await _storeRepo.UpdateSetting(storeId, ShopifyStoreSettings.SettingsName, settings);
 			}
 		}
 		return RedirectToAction(nameof(Settings), new { storeId });
