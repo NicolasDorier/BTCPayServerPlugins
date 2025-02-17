@@ -8,38 +8,155 @@ using System.Threading.Tasks;
 using BTCPayServer.Plugins.ShopifyPlugin.ViewModels.Models;
 using Microsoft.Extensions.Logging;
 using System.Collections.Generic;
+using Google.Apis.Auth.OAuth2;
+using System.IdentityModel.Tokens.Jwt;
+using Microsoft.IdentityModel.Tokens;
+using System.Net;
+using System.Security.Cryptography;
+using Newtonsoft.Json.Serialization;
+using System.Globalization;
+using BTCPayServer.Plugins.ShopifyPlugin.JsonConverters;
+using Newtonsoft.Json.Converters;
+using BTCPayServer.Plugins.ShopifyPlugin.ViewModels;
+using System.Text.RegularExpressions;
+using System.Security;
+using Microsoft.AspNetCore.WebUtilities;
 
 namespace BTCPayServer.Plugins.ShopifyPlugin.Services
 {
+    public class ShopifyAppClient
+    {
+		private readonly HttpClient _httpClient;
+		private readonly ShopifyAppCredentials _credentials;
+
+		public ShopifyAppClient(HttpClient httpClient, ShopifyAppCredentials appCredentials)
+		{
+			_httpClient = httpClient;
+			this._credentials = appCredentials;
+		}
+		/// <summary>
+		/// Validate a session token
+		/// </summary>
+		/// <param name="sessionId"></param>
+		/// <returns></returns>
+		/// <exception cref="SecurityTokenInvalidIssuerException">storeUrl</exception>
+		public (string ShopUrl, string Issuer) ValidateSessionToken(string sessionId, bool skipLifeTimeCheck = false)
+		{
+			var handler = new JwtSecurityTokenHandler();
+			var token = handler.ReadJwtToken(sessionId);
+			handler.ValidateToken(sessionId, new TokenValidationParameters()
+			{
+				ValidateIssuer = false,
+				ValidateAudience = true,
+				ValidateLifetime = !skipLifeTimeCheck,
+				ValidateIssuerSigningKey = true,
+				IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_credentials.ClientSecret)),
+				ValidAudiences = [_credentials.ClientId],
+			}, out _);
+			var storeUrl = token.Claims.FirstOrDefault(c => c.Type == "dest")?.Value;
+			if (!token.Issuer.StartsWith(storeUrl))
+				throw new SecurityTokenInvalidIssuerException("Invalid Issuer");
+            return (storeUrl, token.Issuer);
+		}
+		public async Task<AccessTokenResponse> GetAccessToken(string shopUrl, string sessionId)
+		{
+			ValidateSessionToken(sessionId);
+			var body = new JObject()
+			{
+				["client_id"] = _credentials.ClientId,
+				["client_secret"] = _credentials.ClientSecret,
+				["grant_type"] = "urn:ietf:params:oauth:grant-type:token-exchange",
+				["subject_token"] = sessionId,
+				["subject_token_type"] = "urn:ietf:params:oauth:token-type:id_token",
+				["requested_token_type"] = "urn:shopify:params:oauth:token-type:offline-access-token"
+			};
+			var req = new HttpRequestMessage(HttpMethod.Post, $"{shopUrl}/admin/oauth/access_token");
+			req.Content = new StringContent(body.ToString(), Encoding.UTF8, "application/json");
+			req.Headers.Add("Accept", "application/json");
+			using var resp = await _httpClient.SendAsync(req);
+			var strResp = await resp.Content?.ReadAsStringAsync();
+			if (!resp.IsSuccessStatusCode)
+				throw new ShopifyApiException($"Error while getting access token (HTTP {resp.StatusCode}): {strResp}");
+			return JsonConvert.DeserializeObject<AccessTokenResponse>(strResp);
+		}
+
+		public bool VerifyWebhookSignature(string body, string hmac)
+		{
+			var keyBytes = Encoding.UTF8.GetBytes(_credentials.ClientSecret);
+			using (var hmacObj = new HMACSHA256(keyBytes))
+			{
+				var hashBytes = hmacObj.ComputeHash(Encoding.UTF8.GetBytes(body));
+				var hashString = Convert.ToBase64String(hashBytes);
+				return hashString.Equals(hmac, StringComparison.OrdinalIgnoreCase);
+			}
+		}
+
+		public bool ValidateQueryString(string queryString, bool skipLifeTimeCheck = false)
+		{
+            var query = QueryHelpers.ParseQuery(queryString);
+            if (!query.TryGetValue("hmac", out var hmac))
+                return false;
+			if (!query.TryGetValue("timestamp", out var timestampStr) || !long.TryParse(timestampStr, out var timestamp))
+				return false;
+
+			DateTimeOffset date = default;
+            try
+            {
+				date = DateTimeOffset.FromUnixTimeSeconds(timestamp);
+            }
+            catch
+            {
+				return false;
+			}
+			if (!skipLifeTimeCheck && DateTimeOffset.UtcNow - date > TimeSpan.FromHours(1.0))
+				return false;
+			query.Remove("hmac");
+            queryString = queryString.Replace($"hmac={hmac}", "").Replace("&&", "&");
+			var keyBytes = Encoding.UTF8.GetBytes(_credentials.ClientSecret);
+			using (var hmacObj = new HMACSHA256(keyBytes))
+			{
+				var hashBytes = hmacObj.ComputeHash(Encoding.UTF8.GetBytes(queryString));
+				var hashString = BitConverter.ToString(hashBytes).Replace("-","");
+				if (!hashString.Equals(hmac, StringComparison.OrdinalIgnoreCase))
+					return false;
+			}
+            return true;
+		}
+	}
     public class ShopifyApiClient
     {
         private readonly HttpClient _httpClient;
-        private readonly ShopifyApiClientCredentials _credentials;
+		private readonly string _shopUrl;
+		private readonly ShopifyApiClientCredentials _credentials;
 
-        public ShopifyApiClient(IHttpClientFactory httpClientFactory, ShopifyApiClientCredentials credentials)
+        public ShopifyApiClient(
+            HttpClient httpClient,
+            string shopUrl,
+            ShopifyApiClientCredentials credentials)
         {
-            if (httpClientFactory != null)
-            {
-                _httpClient = httpClientFactory.CreateClient(nameof(ShopifyApiClient));
-            }
-            else // tests don't provide IHttpClientFactory
-            {
-                _httpClient = new HttpClient();
-            }
-            _credentials = credentials;
+			_httpClient = httpClient;
+			_shopUrl = shopUrl;
+			_credentials = credentials;
 
-            var bearer = $"{_credentials.ApiKey}:{_credentials.ApiPassword}";
-            bearer = NBitcoin.DataEncoders.Encoders.Base64.EncodeData(Encoding.UTF8.GetBytes(bearer));
-
-            _httpClient.DefaultRequestHeaders.Add("Authorization", "Basic " + bearer);
+            if (credentials is ShopifyApiClientCredentials.Basic b)
+            {
+                var bearer = $"{b.ApiKey}:{b.ApiPassword}";
+                bearer = NBitcoin.DataEncoders.Encoders.Base64.EncodeData(Encoding.UTF8.GetBytes(bearer));
+                _httpClient.DefaultRequestHeaders.Add("Authorization", "Basic " + bearer);
+            }
+            else if (credentials is ShopifyApiClientCredentials.AccessToken a)
+            {
+                _httpClient.DefaultRequestHeaders.Add("X-Shopify-Access-Token", a.Token);
+            }
+            else
+                throw new NotSupportedException(credentials.ToString());
         }
 
-        private HttpRequestMessage CreateRequest(string shopName, HttpMethod method, string action,
-            string relativeUrl = null, string apiVersion = "2024-07")
-        {
-            var url =
-                $"https://{(shopName.Contains('.', StringComparison.InvariantCulture) ? shopName : $"{shopName}.myshopify.com")}/{relativeUrl ?? ($"admin/api/{apiVersion}/" + action)}";
-            var req = new HttpRequestMessage(method, url);
+		private HttpRequestMessage CreateRequest(HttpMethod method, string action, string relativeUrl = null,
+			string apiVersion = "2024-07")
+		{
+            relativeUrl ??= ($"admin/api/{apiVersion}/" + action);
+            var req = new HttpRequestMessage(method, $"{_shopUrl}/{relativeUrl}");
             return req;
         }
 
@@ -59,7 +176,7 @@ namespace BTCPayServer.Plugins.ShopifyPlugin.Services
 
         public async Task<CreateWebhookResponse> CreateWebhook(string topic, string address, string format = "json")
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Post, $"webhooks.json");
+            var req = CreateRequest(HttpMethod.Post, $"webhooks.json");
             var payload = new
             {
                 webhook = new { address, topic, format }
@@ -71,48 +188,37 @@ namespace BTCPayServer.Plugins.ShopifyPlugin.Services
 
         public async Task<List<CreateWebhookResponse>> RetrieveWebhooks()
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Get, $"webhooks.json");
+            var req = CreateRequest(HttpMethod.Get, $"webhooks.json");
             var strResp = await SendRequest(req);
             return JsonConvert.DeserializeObject<List<CreateWebhookResponse>>(strResp);
         }
 
         public async Task<CreateWebhookResponse> RetrieveWebhook(string id)
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Get, $"webhooks/{id}.json");
+            var req = CreateRequest(HttpMethod.Get, $"webhooks/{id}.json");
             var strResp = await SendRequest(req);
             return JsonConvert.DeserializeObject<CreateWebhookResponse>(strResp);
         }
 
         public async Task RemoveWebhook(string id)
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Delete, $"webhooks/{id}.json");
+            var req = CreateRequest(HttpMethod.Delete, $"webhooks/{id}.json");
             await SendRequest(req);
         }
 
         public async Task<string[]> CheckScopes()
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Get, null, "admin/oauth/access_scopes.json");
+            var req = CreateRequest(HttpMethod.Get, null, "admin/oauth/access_scopes.json");
             var c = JObject.Parse(await SendRequest(req));
             return c["access_scopes"].Values<JToken>()
                 .Select(token => token["handle"].Value<string>()).ToArray();
         }
 
-        public async Task<TransactionsListResp> TransactionsList(string orderId)
-        {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Get, $"orders/{orderId}/transactions.json");
-
-            var strResp = await SendRequest(req);
-
-            var parsed = JsonConvert.DeserializeObject<TransactionsListResp>(strResp);
-
-            return parsed;
-        }
-
-        public async Task<TransactionsCreateResp> TransactionCreate(string orderId, TransactionsCreateReq txnCreate)
+        public async Task<TransactionsCreateResp> TransactionCreate(long orderId, TransactionsCreateReq txnCreate)
         {
             var postJson = JsonConvert.SerializeObject(txnCreate);
 
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Post, $"orders/{orderId}/transactions.json");
+            var req = CreateRequest(HttpMethod.Post, $"orders/{orderId}/transactions.json");
             req.Content = new StringContent(postJson, Encoding.UTF8, "application/json");
 
             var strResp = await SendRequest(req);
@@ -121,7 +227,7 @@ namespace BTCPayServer.Plugins.ShopifyPlugin.Services
 
         public async Task<List<ShopifyOrderVm>> RetrieveAllOrders()
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Get, "orders.json");
+            var req = CreateRequest(HttpMethod.Get, "orders.json");
 
             var strResp = await SendRequest(req);
 
@@ -129,49 +235,183 @@ namespace BTCPayServer.Plugins.ShopifyPlugin.Services
 
         }
 
-        public async Task<ShopifyOrder> GetOrder(string orderId)
+
+        public async Task<ShopifyOrder> GetOrderByCheckoutToken(string checkoutToken, bool withTransactions = false)
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Get,
-                $"orders/{orderId}.json?fields=id,order_number,total_price,total_outstanding,currency,presentment_currency,transactions,financial_status");
+            var req = """
+                query getByCheckoutId($query: String!, $includeTxs: Boolean!) {
+                orders(first: 1, query: $query) {
+                    edges {
+                      node {
+                      {OrderData}
+                      }
+                    }
+                  }
+                }
+                """.Replace("{OrderData}", OrderData);
+            var resp = await SendGraphQL(req, new JObject() { ["query"] = $"checkout_token:{checkoutToken}", ["includeTxs"] = withTransactions });
+            return resp["data"]["orders"]["edges"] switch
+            {
+				JArray a when a.Count > 0 => a[0]["node"].ToObject<ShopifyOrder>(JsonSerializer),
+                _ => null
+            };
+		}
 
-            var strResp = await SendRequest(req);
+        const string OrderData =
+			"""
+            id
+            name
+            totalOutstandingSet {
+                shopMoney {
+                amount,
+                currencyCode
+                }
+                presentmentMoney {
+                amount,
+                currencyCode
+                }
+            }
+            transactions @include(if: $includeTxs) {
+                id
+                gateway
+                kind
+                authorizationCode
+                status
+                amountSet {
+                presentmentMoney {
+                    amount
+                    currencyCode
+                }
+                shopMoney {
+                    amount
+                    currencyCode
+                }
+                }
+            }
+            """;
+		public async Task<ShopifyOrder> GetOrder(long orderId, bool withTransactions = false)
+		{
 
-            return JObject.Parse(strResp)["order"].ToObject<ShopifyOrder>();
-        }
-        public async Task<ShopifyOrder> CancelOrder(string orderId)
+			// https://shopify.dev/docs/api/admin-graphql/2024-10/queries/order
+			var req = """
+            query getOrderDetails($orderId: ID!, $includeTxs: Boolean!) {
+              order(id: $orderId) {
+                {OrderData}
+              }
+            }
+            """.Replace("{OrderData}", OrderData);
+
+            var resp = await SendGraphQL(req,
+				new JObject()
+				{
+					["orderId"] = ShopifyId.Order(orderId).ToString(),
+					["includeTxs"] = withTransactions
+				});
+			return resp["data"]["order"].ToObject<ShopifyOrder>(JsonSerializer);
+		}
+
+		private HttpRequestMessage CreateGraphQLRequest(string req, JObject variables = null)
+		{
+			var jobj = new JObject() { ["query"] = req };
+			if (variables is not null)
+				jobj.Add("variables", variables);
+			return new HttpRequestMessage(HttpMethod.Post, $"{_shopUrl}/admin/api/2024-10/graphql.json")
+			{
+				Content = new StringContent(jobj.ToString(), Encoding.UTF8, "application/json")
+			};
+		}
+
+		JsonSerializer JsonSerializer = new JsonSerializer()
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Post,
-                $"orders/{orderId}/cancel.json?restock=true", null, "2024-04");
+            ContractResolver = new CamelCasePropertyNamesContractResolver(),
+            Converters = { new ShopifyIdJsonConverter(), new StringEnumConverter() }
+        };
 
-            var strResp = await SendRequest(req);
-
-            return JObject.Parse(strResp)["order"].ToObject<ShopifyOrder>();
-        }
-
-        public async Task<long> OrdersCount()
+        // https://shopify.dev/docs/api/admin-graphql/2024-04/mutations/orderCapture
+        public async Task CaptureOrder(CaptureOrderRequest captureOrder)
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Get, $"orders/count.json");
-            var strResp = await SendRequest(req);
+            var req = """
+                mutation M($input: OrderCaptureInput!){
+                    orderCapture(input: $input) {
+                        transaction {
+                            id
+                        }
+                        userErrors {
+                          field
+                          message
+                        }
+                    }
+                }
+                """;
+			JObject respObj = await SendGraphQL(req, new JObject() { ["input"] = JObject.FromObject(captureOrder, JsonSerializer) });
+			
+		}
+		public async Task CancelOrder(CancelOrderRequest cancelOrder)
+		{
+			string req = """
+                  mutation orderCancel($notifyCustomer: Boolean, $orderId: ID!, $reason: OrderCancelReason!, $refund: Boolean!, $restock: Boolean!, $staffNote: String) {
+                  orderCancel(notifyCustomer: $notifyCustomer, orderId: $orderId, reason: $reason, refund: $refund, restock: $restock, staffNote: $staffNote) {
+                    orderCancelUserErrors {
+                      code
+                      field
+                      message
+                    }
+                  }
+                }
+                """;
+			JObject respObj = await SendGraphQL(req, JObject.FromObject(cancelOrder, JsonSerializer));
+			var errors = respObj["data"]["orderCancel"]["orderCancelUserErrors"] as JArray;
+			if (errors.Count != 0)
+				throw new ShopifyApiException(errors[0]["message"].Value<string>());
+		}
+		private async Task<JObject> SendGraphQL(string req, JObject variables = null)
+		{
+			var httpReq = CreateGraphQLRequest(req, variables);
+			using var resp = await _httpClient.SendAsync(httpReq);
+			var strResp = await resp.Content.ReadAsStringAsync();
+			resp.EnsureSuccessStatusCode();
+			return JObject.Parse(strResp);
+		}
 
-            var parsed = JsonConvert.DeserializeObject<CountResponse>(strResp);
-
-            return parsed.Count;
-        }
-
-        public async Task<bool> OrderExists(string orderId)
+        public async Task<ShopifyId> CompleteDraftOrder(long orderId)
         {
-            var req = CreateRequest(_credentials.ShopName, HttpMethod.Get, $"orders/{orderId}.json?fields=id");
-            var strResp = await SendRequest(req);
+			var req = """
+                mutation M($id: ID!) {
+                draftOrderComplete(id: $id) {
+                  draftOrder {
+                    order
+                    {
+                        id
+                    }
+                  }
+                }
+                }
+                """;
+			JObject respObj = await SendGraphQL(req, new JObject() { ["id"] = ShopifyId.DraftOrder(orderId).ToString() });
+			return ShopifyId.Parse(respObj["data"]["draftOrderComplete"]["draftOrder"]["order"]["id"].Value<string>());
+		}
+		public async Task<ShopifyId> DuplicateOrder(long orderId)
+		{
+            var req = """
+                mutation M($id: ID) {
+                draftOrderDuplicate(id: $id) {
+                  draftOrder {
+                    id
+                  }
+                }
+                }
+                """;
+			JObject respObj = await SendGraphQL(req, new JObject() { ["id"] = ShopifyId.DraftOrder(orderId).ToString() });
+            return ShopifyId.Parse(respObj["data"]["draftOrderDuplicate"]["draftOrder"]["id"].Value<string>());
+		}
+	}
 
-            return strResp?.Contains(orderId, StringComparison.OrdinalIgnoreCase) == true;
-        }
-    }
 
-    public class ShopifyApiClientCredentials
+    public record ShopifyApiClientCredentials
     {
-        public string ShopName { get; set; }
-        public string ApiKey { get; set; }
-        public string ApiPassword { get; set; }
+        public record Basic (string ApiKey, string ApiPassword) : ShopifyApiClientCredentials;
+        public record AccessToken(string Token) : ShopifyApiClientCredentials;
     }
+    public record ShopifyAppCredentials(string ClientId, string ClientSecret);
 }
 

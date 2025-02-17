@@ -17,32 +17,8 @@ public class Plugin : BaseBTCPayServerPlugin
 
     public override void Execute(IServiceCollection services)
     {
-        services.AddSingleton<IUIExtension>(new UIExtension("ShopifyPluginHeaderNav", "header-nav"));
-        services.AddSingleton<ShopifyHostedService>();
+        services.AddUIExtension("header-nav", "ShopifyPluginHeaderNav");
+		services.AddSingleton<ShopifyClientFactory>();
         services.AddHostedService<ShopifyHostedService>();
-        services.AddHostedService<ApplicationPartsLogger>();
-        services.AddSingleton<ShopifyDbContextFactory>();
-        services.AddDbContext<ShopifyDbContext>((provider, o) =>
-        {
-            var factory = provider.GetRequiredService<ShopifyDbContextFactory>();
-            factory.ConfigureBuilder(o);
-        });
-        services.AddHostedService<PluginMigrationRunner>();
-
-        services.AddCors(options =>
-        {
-            options.AddPolicy("AllowAllOrigins", builder =>
-            {
-                builder.AllowAnyOrigin()
-                       .AllowAnyMethod()
-                       .AllowAnyHeader();
-            });
-        });
-    }
-
-    public override void Execute(IApplicationBuilder applicationBuilder, IServiceProvider applicationBuilderApplicationServices)
-    {
-        applicationBuilder.UseCors("AllowAllOrigins");
-        base.Execute(applicationBuilder, applicationBuilderApplicationServices);
     }
 }
