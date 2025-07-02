@@ -153,6 +153,7 @@ query M($walletId: WalletId!) {
         CancellationToken cancellation = default)
     {
         var isUSD = (await GetWalletInfo()).WalletCurrency == BlinkCurrency.USD;
+        var wid = await GetWalletId();
         var reques =
             new GraphQLRequest
         {
@@ -192,12 +193,12 @@ query M($paymentHash: PaymentHash!, $walletId: WalletId!) {
             OperationName = "M",
             Variables = new
             {
-                walletId = await GetWalletId(),
+                walletId = wid,
                 paymentHash = invoiceId
             }
         };
         var response = await _client.SendQueryAsync<JObject>(reques,  cancellation);
-        Logger.LogInformation($"Get invoice {invoiceId} : " + response.Data.ToString());
+        Logger.LogInformation($"Get invoice {invoiceId} with wallet {wid}: " + response.Data.ToString());
         var result = response.Data?.SelectToken("me.defaultAccount.walletById.invoiceByPaymentHash") as JObject;
         return result is null ? null : ToInvoice(result);
     }
