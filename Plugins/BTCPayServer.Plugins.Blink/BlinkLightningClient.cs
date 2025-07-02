@@ -37,7 +37,7 @@ public class BlinkLightningClient : IExtendedLightningClient
         var reques = new GraphQLRequest
         {
             Query = @"
-query InvoiceByPaymentHash($walletId: WalletId!) {
+query M($walletId: WalletId!) {
   me {
     defaultAccount {
       walletById(walletId: $walletId) {
@@ -46,7 +46,7 @@ query InvoiceByPaymentHash($walletId: WalletId!) {
     }
   }
 }",
-            OperationName = "InvoiceByPaymentHash",
+            OperationName = "M",
             Variables = new
             {
                 walletId = walletId
@@ -152,10 +152,28 @@ query InvoiceByPaymentHash($walletId: WalletId!) {
     public async Task<LightningInvoice?> GetInvoice(string invoiceId,
         CancellationToken cancellation = default)
     {
-        
-        var reques = new GraphQLRequest
+        var isUSD = (await GetWalletInfo()).WalletCurrency == BlinkCurrency.USD;
+        var reques =
+            new GraphQLRequest
         {
-            Query = @"
+            Query = isUSD ?
+                @"
+query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
+  me {
+    defaultAccount {
+      walletById(walletId: $walletId) {
+        invoiceByPaymentHash(paymentHash: $paymentHash) {
+          createdAt
+          paymentHash
+          paymentRequest
+          paymentSecret
+          paymentStatus
+        }
+      }
+    }
+  }
+}"
+                : @"
 query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
   me {
     defaultAccount {
@@ -526,8 +544,7 @@ update {
                 _WebSocketErrorCount = 0;
                 try
                 {
-                    if(response?.Data is null)
-                        return;
+                    this._logger.LogInformation(response?.Data.ToString());
                     if (response.Data.SelectToken("myUpdates.update.transaction.direction")?.Value<string>() != "RECEIVE")
                         return;
                     var invoiceId = response.Data
@@ -557,8 +574,12 @@ update {
             await foreach (var id in _invoices.Reader.ReadAllAsync(cancellation))
             {
                 var invoice = await _lightningClient.GetInvoice(id, cancellation);
+                this._logger.LogInformation("Invoice with id " + id + " received.");
                 if (invoice is not null)
+                {
+                    this._logger.LogInformation("Invoice found");
                     return invoice;
+                }
             }
             throw new ChannelClosedException();
         }
