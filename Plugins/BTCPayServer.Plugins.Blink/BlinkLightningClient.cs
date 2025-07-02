@@ -158,7 +158,7 @@ query M($walletId: WalletId!) {
         {
             Query = isUSD ?
                 @"
-query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
+query M($paymentHash: PaymentHash!, $walletId: WalletId!) {
   me {
     defaultAccount {
       walletById(walletId: $walletId) {
@@ -174,7 +174,7 @@ query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
   }
 }"
                 : @"
-query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
+query M($paymentHash: PaymentHash!, $walletId: WalletId!) {
   me {
     defaultAccount {
       walletById(walletId: $walletId) {
@@ -189,17 +189,17 @@ query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
     }
   }
 }",
-            OperationName = "InvoiceByPaymentHash",
+            OperationName = "M",
             Variables = new
             {
                 walletId = await GetWalletId(),
                 paymentHash = invoiceId
             }
         };
-        var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
-        
-
-        return response.Data is null ? null : ToInvoice(response.Data.me.defaultAccount.walletById.invoiceByPaymentHash);
+        var response = await _client.SendQueryAsync<JObject>(reques,  cancellation);
+        Logger.LogInformation("Get invoice" + response.Data.ToString());
+        var result = response?.Data?["me"]?["defaultAccount"]?["walletById"]?["invoiceByPaymentHash"] as JObject;
+        return result is null ? null : ToInvoice(result);
     }
 
     public LightningInvoice? ToInvoice(JObject invoice)
