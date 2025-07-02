@@ -197,7 +197,7 @@ query M($paymentHash: PaymentHash!, $walletId: WalletId!) {
             }
         };
         var response = await _client.SendQueryAsync<JObject>(reques,  cancellation);
-        Logger.LogInformation("Get invoice" + response.Data.ToString());
+        Logger.LogInformation($"Get invoice {invoiceId} : " + response.Data.ToString());
         var result = response.Data?.SelectToken("me.defaultAccount.walletById.invoiceByPaymentHash") as JObject;
         return result is null ? null : ToInvoice(result);
     }
