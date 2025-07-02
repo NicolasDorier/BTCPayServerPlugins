@@ -578,6 +578,7 @@ update {
                 if (invoice is not null)
                 {
                     this._logger.LogInformation("Invoice found");
+                    this._logger.LogWarning("Invoice found 2");
                     return invoice;
                 }
             }
