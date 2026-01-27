@@ -716,7 +716,19 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
             null => PayResult.Unknown,
             _ => throw new ArgumentOutOfRangeException()
         };
-        if (result.Result == PayResult.Error && response.TryGetValue("errors", out var error))
+        bool authError = false;
+        response.TryGetValue("errors", out var error);
+        if (result.Result == PayResult.Unknown && error is not null)
+        {
+            if (error.ToString().Contains("AuthorizationError",
+                    StringComparison.InvariantCultureIgnoreCase))
+            {
+                result.Result = PayResult.Error;
+                authError = true;
+            }
+        }
+
+        if (result.Result == PayResult.Error && error is not null)
         {
             if (error.ToString().Contains("ResourceAttemptsRedlockServiceError", StringComparison.InvariantCultureIgnoreCase))
             {
@@ -737,6 +749,7 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
                     "FAILURE" => LightningPaymentStatus.Failed,
                     "PENDING" => LightningPaymentStatus.Pending,
                     "SUCCESS" => LightningPaymentStatus.Complete,
+                    null when authError => LightningPaymentStatus.Failed,
                     string status => throw new ArgumentOutOfRangeException($"Unknown status received by blink ({status})"),
                     _ => LightningPaymentStatus.Unknown,
                 },
