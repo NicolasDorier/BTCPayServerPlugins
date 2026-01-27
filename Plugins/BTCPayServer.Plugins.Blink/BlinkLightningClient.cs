@@ -704,7 +704,8 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
         CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation,
             new CancellationTokenSource(payParams?.SendTimeout ?? PayInvoiceParams.DefaultSendTimeout).Token);
         var response =(JObject) (await  _client.SendQueryAsync<dynamic>(request,  cts.Token)).Data.lnInvoicePaymentSend;
-        
+        Logger.LogInformation("Response");
+        Logger.LogInformation(response.ToString());
         var result = new PayResponse();
         result.Result = response["status"].Value<string>() switch
         {
