@@ -339,7 +339,7 @@ query TransactionsByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!
         //     "status": "SUCCESS"
         // }
         // ]
-        var transaction = transactions.OfType<JObject>().FirstOrDefault(o => (string)transactions["direction"]! == "SEND");
+        var transaction = transactions.OfType<JObject>().FirstOrDefault(o => (string)o["direction"]! == "SEND");
         if ((string)transaction["direction"] == "RECEIVE")
             return null;
 
