@@ -702,7 +702,7 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
         var bolt11Parsed = BOLT11PaymentRequest.Parse(bolt11, _network);
        
         CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation,
-            new CancellationTokenSource(payParams?.SendTimeout ?? PayInvoiceParams.DefaultSendTimeout).Token);
+            new CancellationTokenSource(payParams?.SendTimeout ?? TimeSpan.FromSeconds(1.0)).Token);
         var response =(JObject) (await  _client.SendQueryAsync<dynamic>(request,  cts.Token)).Data.lnInvoicePaymentSend;
         Logger.LogInformation("Response");
         Logger.LogInformation(response.ToString());
