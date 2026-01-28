@@ -301,6 +301,8 @@ query TransactionsByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!
         };
         var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
         var item = (JArray) response.Data.me.defaultAccount.walletById.transactionsByPaymentHash;
+        this.Logger.LogInformation("Get payment");
+        this.Logger.LogInformation(item.ToString());
         return item.Any()? ToLightningPayment((JObject)item.First()): null;
     }
 
