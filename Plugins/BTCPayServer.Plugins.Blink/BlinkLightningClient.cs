@@ -426,7 +426,7 @@ query Transactions($walletId: WalletId!) {
         
             
             
-        var result = ((JArray)response.Data.me.defaultAccount.walletById.transactions.edges).Select(o => ToLightningPayment((JObject) o["node"])).Where(o => o is not null && (request.IncludePending is not true || o.Status!= LightningPaymentStatus.Pending)).ToArray();
+        var result = ((JArray)response.Data.me.defaultAccount.walletById.transactions.edges).Select(o => ToLightningPayment(new JArray((JObject) o["node"]))).Where(o => o is not null && (request.IncludePending is not true || o.Status!= LightningPaymentStatus.Pending)).ToArray();
         return (LightningPayment[]) result;
     }
 
@@ -735,7 +735,7 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
         };
         var bolt11Parsed = BOLT11PaymentRequest.Parse(bolt11, _network);
        
-        CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation,
+        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation,
             new CancellationTokenSource(payParams?.SendTimeout ?? TimeSpan.FromSeconds(1.0)).Token);
         var response =(JObject) (await  _client.SendQueryAsync<dynamic>(request,  cts.Token)).Data.lnInvoicePaymentSend;
         Logger.LogInformation("Response");
